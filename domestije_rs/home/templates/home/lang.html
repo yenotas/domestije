@@ -1,0 +1,24 @@
+{% load i18n %}
+
+<div class="lang-switcher flex space-x-2">
+    {% for code, name in LANGUAGES %}
+        <a href="/{{ code }}/"
+           class="px-3 py-1 rounded-md text-sm font-medium {% if code == current_lang %}bg-blue-600 text-white{% else %}bg-gray-200 text-gray-800 hover:bg-gray-300{% endif %}"
+           title="{% trans name %}">
+            {{ code|upper }}
+        </a>
+    {% empty %}
+        <p class="text-red-600">No languages found (current_lang: {{ current_lang }})</p>
+    {% endfor %}
+</div>
+
+<script>
+    document.querySelectorAll('.lang-switcher a').forEach(link => {
+        link.addEventListener('click', function (e) {
+            e.preventDefault();
+            const lang = this.getAttribute('href').split('/')[1];
+            document.cookie = `preferred_lang=${lang};path=/;max-age=31536000`;
+            window.location.href = this.getAttribute('href');
+        });
+    });
+</script>

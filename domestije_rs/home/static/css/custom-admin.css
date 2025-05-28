@@ -1,0 +1,14 @@
+:root {
+    --w-color-surface-menus: #222f55;
+    --w-color-positive-100: #476c8d;
+    --w-color-info-100: #73acc9;
+    --w-color-surface-menu-item-active: #2b456e;
+    --w-color-text-label: #222f55;
+    --w-color-surface-button-default: #2b456e;
+    --w-color-text-button-outline-default: #2b456e;
+    --w-color-text-link-default: #476c8d;
+    --w-color-text-label: #2b456e;
+    --w-color-icon-primary: #2b456e;
+    --w-color-surface-button-hover: #476c8d;
+    --w-color-surface-tooltip: #222f55;
+}
