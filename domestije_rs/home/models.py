@@ -61,7 +61,7 @@ class HomePage(Page):
         return context
 
 class Category(Page):
-    description = models.TextField(blank=True)
+    description = RichTextField(blank=True, null=True, verbose_name="Описание категории")
     sort_order = models.IntegerField(default=0, help_text="Порядок сортировки категории")
     image = models.ForeignKey('wagtailimages.Image', null=True, blank=True, on_delete=models.SET_NULL)
     manually_edited = models.BooleanField(default=False, help_text="Отметьте, если страница отредактирована вручную")
@@ -107,7 +107,7 @@ class Category(Page):
 
 # Товар
 class Product(Page):
-    description = models.TextField(blank=True)
+    description = RichTextField(blank=True, null=True, verbose_name="Описание продукта")
     price = models.DecimalField(max_digits=10, decimal_places=2)
     sku = models.CharField(max_length=64, unique=True, blank=True, null=True)
     is_active = models.BooleanField(default=True)
@@ -129,7 +129,7 @@ class Product(Page):
 
 # Рецепт
 class Recipe(Page):
-    description = models.TextField(blank=True)
+    description = RichTextField(blank=True, null=True, verbose_name="Содержание рецепта")
     is_active = models.BooleanField(default=True)
     categories = models.ManyToManyField(Category, related_name='recipes', blank=True)
     manually_edited = models.BooleanField(default=False, help_text="Отметьте, если страница отредактирована вручную")

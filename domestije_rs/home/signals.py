@@ -39,6 +39,62 @@ def ensure_unique_slug(base_slug, instance, locale):
     return base_slug
 
 
+def build_slug_from_hierarchy(instance, lang=None):
+    locale_obj = Locale.objects.get(language_code=lang) if lang else instance.locale
+    current_slug_part = slugify(unidecode(instance.title.lower()))
+
+    parent = instance.get_parent()
+
+    # Если нет родителя, это корневая страница (например, HomePage или Category первого уровня).
+    # Ее слаг - это просто ее собственное название.
+    # Пример: для "Услуги" (depth 4), слаг должен быть "uslugi"
+    if not parent:
+        return ensure_unique_slug(current_slug_part, instance, locale_obj)
+
+    # Для всех остальных страниц (с родителем), слаг должен быть составным:
+    # слаг родителя + слаг текущей страницы.
+    # Мы должны получить слаг родителя в целевой локали.
+    parent_in_locale_base = Page.objects.filter(
+        translation_key=parent.translation_key,
+        locale=locale_obj
+    ).first()
+
+    parent_in_locale = parent_in_locale_base.specific if parent_in_locale_base else None
+
+    parent_slug_for_hierarchy = ""
+    if parent_in_locale and parent_in_locale.slug:
+        parent_slug_for_hierarchy = parent_in_locale.slug
+    else:
+        # Fallback: если переведенного родителя нет или у него нет слага.
+        # Это может произойти, если родитель еще не был сохранен или его слаг не был установлен.
+        # Попытаемся перевести название родителя, чтобы сгенерировать его часть слага.
+        # Также добавим refresh_from_db на случай, если слаг не был загружен.
+        if parent_in_locale_base and not parent_in_locale_base.slug:
+            parent_in_locale_base.refresh_from_db()  # Попытка обновить из БД
+            parent_in_locale = parent_in_locale_base.specific  # Перезагрузить specific
+            if parent_in_locale and parent_in_locale.slug:
+                parent_slug_for_hierarchy = parent_in_locale.slug
+                print(
+                    f"[build_slug_from_hierarchy] Refreshed and found slug for parent_in_locale: {parent_slug_for_hierarchy}")
+
+        if not parent_slug_for_hierarchy:  # Если слаг все еще не найден
+            try:
+                temp_translator = Translator(from_lang=parent.locale.language_code, to_lang=lang)
+                translated_parent_title = temp_translator.translate(parent.title)
+                parent_slug_for_hierarchy = slugify(unidecode(translated_parent_title.lower()))
+                print(
+                    f"[build_slug_from_hierarchy] Translated parent slug for hierarchy (fallback): {parent_slug_for_hierarchy} for parent {parent.title} ({parent.locale.language_code}) to {lang}.")
+            except Exception as e:
+                print(
+                    f"[build_slug_from_hierarchy] Warning: Could not get translated parent slug for {parent.title} ({parent.locale.language_code}) to {lang} (fallback to original title slug): {e}")
+                parent_slug_for_hierarchy = slugify(
+                    unidecode(parent.title.lower()))  # Fallback к оригинальному названию родителя
+
+    # Комбинируем слаг родителя с текущим слагом
+    base_slug = f"{parent_slug_for_hierarchy}-{current_slug_part}"
+    return ensure_unique_slug(base_slug, instance, locale_obj)
+
+
 @receiver(pre_save)
 def auto_slug_all(sender, instance, **kwargs):
     if not isinstance(instance, Page):
@@ -61,8 +117,15 @@ def auto_slug_all(sender, instance, **kwargs):
     elif any(c in instance.slug for c in 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'):
         should_regenerate_slug = True
     # 4. Для нерусских локалей: если текущий слаг не соответствует сгенерированному из переведенного заголовка
-    elif lang != 'ru' and instance.slug != expected_slug_from_title:
-        should_regenerate_slug = True
+    # (Эта проверка теперь будет сравнивать с полным иерархическим слагом)
+    elif lang != 'ru' and instance.slug != expected_slug_from_title:  # Эта строка останется, но expected_slug_from_title будет плоским, а слаг - иерархическим
+        # Если слаг не совпадает с плоским вариантом, но должен быть иерархическим,
+        # это условие может быть слишком простым.
+        # Лучше явно проверить, что слаг не соответствует тому, что должен быть
+        # сгенерирован build_slug_from_hierarchy
+        current_expected_full_slug = build_slug_from_hierarchy(instance, lang=lang)
+        if instance.slug != current_expected_full_slug:
+            should_regenerate_slug = True
     # 5. Если название изменилось (для русской страницы)
     elif lang == 'ru' and instance.pk:  # Только для существующих русских страниц
         try:
@@ -83,12 +146,18 @@ def auto_slug_all(sender, instance, **kwargs):
             old_instance = sender.objects.get(pk=instance.pk)
             changed_fields_set = set()
             fields_to_check = ['title', 'draft_title', 'seo_title', 'search_description']
-            if isinstance(instance, (Product, Recipe)):
+
+            # Добавляем 'description', если модель имеет это поле
+            if hasattr(instance, 'description') and instance._meta.get_field('description').editable:
                 fields_to_check.append('description')
+
+            # Добавляем 'topic' для HomePage
             if isinstance(instance, HomePage):
                 fields_to_check.append('topic')
-            # Добавляем image, если оно есть и это не HomePage (у HomePage нет image)
-            if hasattr(instance, 'image') and not isinstance(instance, HomePage):
+
+            # Добавляем 'image', если оно есть и это не HomePage (у HomePage нет image)
+            if hasattr(instance, 'image') and not isinstance(instance, HomePage) and instance._meta.get_field(
+                    'image').editable:
                 fields_to_check.append('image')
 
             for field_name in fields_to_check:
@@ -208,7 +277,8 @@ def auto_translate(sender, instance, created, **kwargs):
                     # Создаем экземпляр родительского класса
                     parent_in_locale = parent.__class__(
                         title=translator.translate(parent.title),
-                        slug=slugify(unidecode(translator.translate(parent.title).lower())),
+                        slug=build_slug_from_hierarchy(parent, lang=code),
+                        # Слаг родителя тоже должен быть иерархическим
                         locale=locale,
                         translation_key=parent.translation_key,
                         draft_title=translator.translate(parent.draft_title) if parent.draft_title else '',
@@ -253,6 +323,12 @@ def auto_translate(sender, instance, created, **kwargs):
                             if getattr(parent_in_locale, field_name) != translated_parent_value:
                                 setattr(parent_in_locale, field_name, translated_parent_value)
                                 parent_changed = True
+                    # Также обновить слаг родителя, если он должен измениться
+                    expected_parent_slug = build_slug_from_hierarchy(parent_in_locale, lang=code)
+                    if parent_in_locale.slug != expected_parent_slug:
+                        parent_in_locale.slug = expected_parent_slug
+                        parent_changed = True
+
                     if parent_changed:
                         with translation.override(code):
                             parent_in_locale._processing = True
@@ -274,7 +350,7 @@ def auto_translate(sender, instance, created, **kwargs):
                 'draft_title': instance.draft_title,
                 'seo_title': instance.seo_title,
                 'search_description': instance.search_description,
-                'description': instance.description if isinstance(instance, (Product, Recipe)) else None,
+                'description': getattr(instance, 'description', None) if hasattr(instance, 'description') else None,
                 'topic': instance.topic if isinstance(instance, HomePage) else None,
                 'image': instance.image if hasattr(instance, 'image') and not isinstance(instance, HomePage) else None,
             }
@@ -338,7 +414,6 @@ def auto_translate(sender, instance, created, **kwargs):
                 # Создаем новый перевод
                 new_target_args = {
                     'title': fields_to_translate.get('title'),
-                    # 'slug': slugify(unidecode(fields_to_translate.get('title', '').lower())),
                     'locale': locale,
                     'translation_key': instance.translation_key,
                     'draft_title': fields_to_translate.get('draft_title'),
@@ -346,23 +421,24 @@ def auto_translate(sender, instance, created, **kwargs):
                     'search_description': fields_to_translate.get('search_description'),
                 }
 
-                if isinstance(instance, (Product, Recipe)):
+                if hasattr(instance, 'description') and instance._meta.get_field(
+                        'description').editable:
                     new_target_args['description'] = fields_to_translate.get('description')
                 if isinstance(instance, HomePage):
                     new_target_args['topic'] = fields_to_translate.get('topic')
                 if hasattr(instance, 'image') and not isinstance(instance,
-                                                                 HomePage):  # image есть и не HomePage
+                                                                 HomePage):
                     new_target_args['image'] = fields_to_translate.get('image')
 
                 new_target = instance.__class__(**new_target_args)
 
                 # Пересчитываем слаг для новой страницы, используя иерархию переведенных родителей
-                # new_target.slug = build_slug_from_hierarchy(new_target, lang=code)
+                new_target.slug = build_slug_from_hierarchy(new_target, lang=code)
 
                 if parent_in_locale:
                     with translation.override(code):
                         new_target._processing = True
-                        parent_in_locale.add_child(instance=new_target)  # <-- Здесь происходит первый pre_save, который вызывает auto_slug_all
+                        parent_in_locale.add_child(instance=new_target)
                         new_target.save()
                         new_target.save_revision().publish()
                         new_target._processing = False
@@ -376,92 +452,3 @@ def auto_translate(sender, instance, created, **kwargs):
         # raise # Закомментируйте 'raise' для отладки, чтобы ошибки не останавливали весь процесс.
     finally:
         _auto_translate_processing_lock.active = False
-
-
-def build_slug_from_hierarchy(instance, lang=None):
-    locale_obj = Locale.objects.get(language_code=lang) if lang else instance.locale
-    current_slug_part = slugify(unidecode(instance.title.lower()))
-
-    # Определяем глубину для логики формирования слага
-    calculated_depth = instance.depth
-    parent = instance.get_parent()  # Получаем родителя здесь
-
-    if calculated_depth is None:
-        if parent:
-            # Если у родителя нет глубины (что тоже странно), то предполагаем
-            # что родитель на 3 уровне, а текущий на 4.
-            calculated_depth = parent.depth + 1 if parent.depth is not None else 4
-        else:
-            # Если нет родителя и depth равен None
-            if isinstance(instance, HomePage):
-                calculated_depth = 3
-            else:
-                calculated_depth = 4  # Для корневых категорий под Home
-            print(
-                f"[build_slug_from_hierarchy] Warning: instance.depth is None and no parent for {instance.title}. "
-                f"Inferring depth {calculated_depth} based on page type (for slug logic).")
-
-    # Логика формирования слага в зависимости от рассчитанной глубины
-    if calculated_depth < 5:
-        # Для depth < 5 — плоский слаг (только текущая часть)
-        return ensure_unique_slug(current_slug_part, instance, locale_obj)
-    else:
-        # Для depth >= 5 — склеенный слаг (слаг родителя + текущая часть)
-        if not parent:
-            print(
-                f"[build_slug_from_hierarchy] Warning: Page {instance.title} has calculated_depth={calculated_depth} "
-                f"but no parent found for hierarchical slug. Falling back to flat slug.")
-            return ensure_unique_slug(current_slug_part, instance, locale_obj)  # Fallback to flat slug if no parent
-
-        # Получаем локализованного родителя для его слага
-        # Здесь критично, чтобы parent_in_locale имел корректный слаг.
-        # Если parent_in_locale только что был создан, его слаг должен был
-        # быть установлен auto_slug_all на его pre_save.
-        parent_in_locale_base = Page.objects.filter(
-            translation_key=parent.translation_key,
-            locale=locale_obj
-        ).first()
-
-        parent_in_locale = parent_in_locale_base.specific if parent_in_locale_base else None
-
-        parent_slug_for_hierarchy = ""
-        if parent_in_locale and parent_in_locale.slug:
-            parent_slug_for_hierarchy = parent_in_locale.slug
-        else:
-            # Если локализованного родителя нет или у него нет слага (что не должно быть после pre_save)
-            # или если parent_in_locale - это только что созданный объект,
-            # который еще не имеет path/slug из-за transaction-level inconsistency,
-            # то это потенциально проблемное место.
-            # Для надежности, можно здесь сделать refresh_from_db() для parent_in_locale
-            # если он найден, но не имеет слага, или если parent_in_locale_base был найден,
-            # но его specific еще не загружен со всеми полями.
-
-            # В данном случае, если parent_in_locale_base существует, но его specific не имеет слага,
-            # это может быть проблемой. Однако, обычно Wagtail при загрузке .specific()
-            # должен загружать все поля.
-
-            # Попробуем сделать это более надежно, если parent_in_locale не имеет слага
-            if parent_in_locale_base and not parent_in_locale_base.slug:
-                parent_in_locale_base.refresh_from_db()  # Попытка обновить из БД
-                parent_in_locale = parent_in_locale_base.specific  # Перезагрузить specific
-                if parent_in_locale and parent_in_locale.slug:
-                    parent_slug_for_hierarchy = parent_in_locale.slug
-                    print(
-                        f"[build_slug_from_hierarchy] Refreshed and found slug for parent_in_locale: {parent_slug_for_hierarchy}")
-
-            if not parent_slug_for_hierarchy:  # Если слаг все еще не найден
-                try:
-                    temp_translator = Translator(from_lang=parent.locale.language_code, to_lang=lang)
-                    translated_parent_title = temp_translator.translate(parent.title)
-                    parent_slug_for_hierarchy = slugify(unidecode(translated_parent_title.lower()))
-                    print(
-                        f"[build_slug_from_hierarchy] Translated parent slug for hierarchy (fallback): {parent_slug_for_hierarchy} for parent {parent.title} ({parent.locale.language_code}) to {lang}.")
-                except Exception as e:
-                    print(
-                        f"[build_slug_from_hierarchy] Warning: Could not get translated parent slug for {parent.title} ({parent.locale.language_code}) to {lang} (fallback to original title slug): {e}")
-                    parent_slug_for_hierarchy = slugify(
-                        unidecode(parent.title.lower()))  # Fallback к оригинальному названию родителя
-
-        # Комбинируем слаг родителя с текущим слагом
-        base_slug = f"{parent_slug_for_hierarchy}-{current_slug_part}"
-        return ensure_unique_slug(base_slug, instance, locale_obj)
