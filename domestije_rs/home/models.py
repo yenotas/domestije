@@ -1,28 +1,4 @@
 from django.db import models
-from django.shortcuts import redirect
-from wagtail.fields import RichTextField
-from wagtail.models import Page
-from wagtail.admin.panels import FieldPanel
-from wagtail.models import Locale
-from django.utils import translation
-from wagtail.fields import StreamField
-from wagtail import blocks
-from wagtail.images.blocks import ImageChooserBlock
-
-from domestije_rs.settings import base
-
-
-# Главная страница
-from django.db import models
-from django.shortcuts import redirect
-from wagtail.fields import RichTextField
-from wagtail.models import Page, Locale
-from wagtail.admin.panels import FieldPanel
-from django.utils import translation
-from domestije_rs.settings import base
-
-from django.db import models
-from django.shortcuts import redirect
 from wagtail.fields import RichTextField
 from wagtail.models import Page, Locale
 from wagtail.admin.panels import FieldPanel
@@ -88,11 +64,13 @@ class Category(Page):
     description = models.TextField(blank=True)
     sort_order = models.IntegerField(default=0, help_text="Порядок сортировки категории")
     image = models.ForeignKey('wagtailimages.Image', null=True, blank=True, on_delete=models.SET_NULL)
+    manually_edited = models.BooleanField(default=False, help_text="Отметьте, если страница отредактирована вручную")
 
     content_panels = Page.content_panels + [
         FieldPanel('description'),
         FieldPanel('sort_order'),
         FieldPanel('image'),
+        FieldPanel('manually_edited'),
     ]
 
     def get_url_parts(self, request=None):
@@ -134,6 +112,7 @@ class Product(Page):
     sku = models.CharField(max_length=64, unique=True, blank=True, null=True)
     is_active = models.BooleanField(default=True)
     categories = models.ManyToManyField(Category, related_name='products', blank=True)
+    manually_edited = models.BooleanField(default=False, help_text="Отметьте, если страница отредактирована вручную")
 
     content_panels = Page.content_panels + [
         FieldPanel('description'),
@@ -141,6 +120,7 @@ class Product(Page):
         FieldPanel('sku'),
         FieldPanel('is_active'),
         FieldPanel('categories'),
+        FieldPanel('manually_edited'),
     ]
 
     class Meta:
@@ -152,11 +132,13 @@ class Recipe(Page):
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
     categories = models.ManyToManyField(Category, related_name='recipes', blank=True)
+    manually_edited = models.BooleanField(default=False, help_text="Отметьте, если страница отредактирована вручную")
 
     content_panels = Page.content_panels + [
         FieldPanel('description'),
         FieldPanel('is_active'),
         FieldPanel('categories'),
+        FieldPanel('manually_edited'),
     ]
 
     class Meta:
